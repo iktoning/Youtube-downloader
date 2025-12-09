@@ -1,5 +1,4 @@
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
 import tkinter as tk
 import threading
 import yt_dlp
@@ -8,6 +7,9 @@ import re
 import subprocess
 import glob
 import shutil
+import json
+from tkinter import filedialog, messagebox
+from datetime import datetime
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
@@ -21,7 +23,7 @@ class ModernDownloader(ctk.CTk):
         super().__init__()
 
         self.title("YouTube Downloader by Ramapuspa_")
-        self.geometry("750x680")
+        self.geometry("750x710")
 
         self.frame = ctk.CTkFrame(self, corner_radius=20)
         self.frame.pack(pady=20, padx=20, fill="both", expand=True)
@@ -63,9 +65,15 @@ class ModernDownloader(ctk.CTk):
             self.frame, text="Download", height=42,
             font=("Segoe UI", 16, "bold"), command=self.start_download
         )
-        self.download_button.pack(pady=15)
-
+        self.download_button.pack(pady=10)
         self.download_path = None
+        
+        # History button
+        self.history_button = ctk.CTkButton(
+            self.frame, text="Lihat History", height=42, 
+            font=("Segoe UI", 16, "bold"), command=self.open_history_window
+        )
+        self.history_button.pack(pady=10)
 
     def log(self, msg):
         clean = clean_ansi(str(msg))
@@ -74,6 +82,106 @@ class ModernDownloader(ctk.CTk):
             self.log_panel.see("end")
         except Exception:
             print(clean)
+    
+    def save_history(self, title, url, resolution, size, output_path):
+        history_file = "download_history.json"
+        entry = {
+            "title": title,
+            "resolution": resolution,
+            "size": size,
+            "output_path": output_path,
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+        data = []
+        # Baca file history
+        if os.path.exists(history_file):
+            try:
+                with open(history_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    data = [data]
+                elif not isinstance(data, list):
+                    # Backup file yang rusak atau reset
+                    shutil.copy(history_file, history_file + ".bak")
+                    data = []
+            except Exception:
+                # backup file corrupt lalu reset
+                try:
+                    shutil.copy(history_file, history_file + ".bak")
+                except Exception:
+                    pass
+                data = []
+                
+        data.append(entry)
+        try:
+            with open(history_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+            self.log("History berhasil disimpan")
+        except Exception as e:
+            self.log(f"Gagal menyimpan history: {e}")
+    
+    def open_history_window(self):
+        history_file = "download_history.json"
+        win = ctk.CTkToplevel(self)
+        win.title("Riwayat Download")
+        win.geometry("700x520")
+        
+        win.transient(self)
+        win.lift()
+        win.focus()
+        win.attributes("-topmost", True)
+        win.after(300, lambda: win.attributes("-topmost", False))
+        win.grab_set()
+        
+        title = ctk.CTkLabel(win, text="History Download", font=("Segoe UI", 25, "bold"))
+        title.pack(pady=10)
+
+        textbox = ctk.CTkTextbox(win, width=660, height=440)
+        textbox.pack(padx=10, pady=6, fill="both", expand=True)
+
+        if not os.path.exists(history_file):
+            textbox.insert("end", "Belum ada history.")
+            return
+
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Toleransi: jika data berupa dict -> ubah jadi list
+            if isinstance(data, dict):
+                data = [data]
+            if not isinstance(data, list):
+                textbox.insert("end", "Format history tidak valid. File di-backup dan di-reset.")
+                try:
+                    shutil.copy(history_file, history_file + ".bak")
+                    with open(history_file, "w", encoding="utf-8") as f:
+                        json.dump([], f)
+                except Exception as e:
+                    textbox.insert("end", f"\nGagal backup/reset file: {e}")
+                return
+
+            if len(data) == 0:
+                textbox.insert("end", "Belum ada history.")
+                return
+
+            for item in reversed(data):  # tampilkan yang terbaru dulu
+                # item mungkin tidak lengkap -> gunakan .get()
+                textbox.insert("end", f"Judul        : {item.get('title','-')}\n")
+                textbox.insert("end", f"Resolusi   : {item.get('resolution','-')}\n")
+                textbox.insert("end", f"Ukuran     : {item.get('size','-')}\n")
+                textbox.insert("end", f"Direktory  : {item.get('output_path','-')}\n")
+                textbox.insert("end", f"Tanggal   : {item.get('date','-')}\n")
+                textbox.insert("end", "-"*70 + "\n\n")
+
+        except Exception as e:
+            textbox.insert("end", f"Error membaca history: {e}")
+            # backup file korup untuk diperiksa user
+            try:
+                shutil.copy(history_file, history_file + ".bak")
+                self.log("File history korup, backup dibuat: " + history_file + ".bak")
+            except Exception:
+                pass
 
     def schedule_resolution_fetch(self, event=None):
         if self.fetch_timer:
@@ -292,11 +400,23 @@ class ModernDownloader(ctk.CTk):
             # ------------------------
             os.remove(video_path)
             os.remove(audio_path)
+            
+            # Simpan history
+            file_size = os.path.getsize(final_path) / (1024*1024)
+            size_str = f"{file_size:.1f} MB"
+
+            self.save_history(
+                title=title,
+                url=url,
+                resolution=quality,
+                size=size_str,
+                output_path=final_path
+            )
 
             self.progress.set(1)
             self.progress_label.configure(text="100%")
             self.log("Download selesai ✔")
-
+        
         except Exception as e:
             self.log(f"ERROR: {e}")
             messagebox.showerror("Error", str(e))
