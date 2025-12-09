@@ -45,11 +45,6 @@ class ModernDownloader(ctk.CTk):
         self.folder_button = ctk.CTkButton(self.frame, text="Pilih Folder", command=self.choose_folder)
         self.folder_button.pack(pady=5)
 
-        # Show progress box
-        self.progress_enabled = ctk.CTkCheckBox(self.frame, text="Tampilkan Progress")
-        self.progress_enabled.select()
-        self.progress_enabled.pack(pady=5)
-
         # Progress bar
         self.progress = ctk.CTkProgressBar(self.frame, width=420)
         self.progress.set(0)
@@ -84,8 +79,8 @@ class ModernDownloader(ctk.CTk):
         if self.fetch_timer:
             self.after_cancel(self.fetch_timer)
             self.fetch_timer = None
-        # call quickly 
-        self.fetch_timer = self.after(10, self.fetch_resolutions)
+        # Fast call
+        self.fetch_timer = self.after(200, self.fetch_resolutions)
 
     def fetch_resolutions(self):
         url = self.url_entry.get().strip()
@@ -98,17 +93,48 @@ class ModernDownloader(ctk.CTk):
             ydl_opts = {"quiet": True, "nocheckcertificate": True}
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-
-            resolutions = set()
+                
+            resolution_map = {}
             for f in info["formats"]:
-                h = f.get("height")
-                if h and h >= 360:
-                    resolutions.add(f"{h}p")
+                height = f.get("height")
+                if not height:
+                    continue
+                if height < 360:
+                    continue
 
-            resolutions = sorted(resolutions, key=lambda x: int(x.replace("p", "")))
-            self.resolution.configure(values=["Otomatis"] + list(resolutions))
+                size = f.get("filesize") or f.get("filesize_approx")
+                if not size:
+                    continue
 
-            self.log("Resolusi berhasil diperbarui.")
+                # Hanya pilih format MP4 atau jika tidak ada, pilih yg terbesar
+                ext = f.get("ext")
+                key = f"{height}p"
+
+                if key not in resolution_map:
+                    resolution_map[key] = (size, ext)
+                else:
+                    # Jika ada format MP4 → Prioritaskan
+                    old_size, old_ext = resolution_map[key]
+
+                    if ext == "mp4" and old_ext != "mp4":
+                        resolution_map[key] = (size, ext)
+                    else:
+                        # Ambil ukuran paling besar
+                        if size > old_size:
+                            resolution_map[key] = (size, ext)
+
+            result_list = []
+            for res, (size, ext) in resolution_map.items():
+                size_mb = size / (1024 * 1024)
+                result_list.append((int(res.replace("p", "")), f"{res} (~{size_mb:.1f} MB)"))
+
+            # Sort berdasarkan angka resolusi
+            result_list.sort(key=lambda x: x[0])
+            display_list = [x[1] for x in result_list]
+            
+            self.resolution.configure(values=["Otomatis"] + display_list)
+            self.log("Menampilkan resolusi video")
+
         except Exception as e:
             self.log(f"Gagal mengambil resolusi! ({e})")
 
@@ -160,7 +186,7 @@ class ModernDownloader(ctk.CTk):
             # Format video + audio
             # ---------------------
             if quality != "Otomatis":
-                h = quality.replace("p", "")
+                h = re.findall(r"(\d+)p", quality)[0]
                 video_format = f"bestvideo[height<={h}]"
             else:
                 video_format = "bestvideo"
@@ -179,9 +205,8 @@ class ModernDownloader(ctk.CTk):
                 "quiet": True,
                 "nocheckcertificate": True,
             }
-
-            if self.progress_enabled.get() == 1:
-                ydl_video_opts["progress_hooks"] = [self.progress_hook]
+            
+            ydl_video_opts["progress_hooks"] = [self.progress_hook]
 
             with yt_dlp.YoutubeDL(ydl_video_opts) as ydl:
                 ydl.download([url])
@@ -198,6 +223,8 @@ class ModernDownloader(ctk.CTk):
                 "quiet": True,
                 "nocheckcertificate": True,
             }
+            
+            ydl_audio_opts["progress_hooks"] = [self.progress_hook]
 
             with yt_dlp.YoutubeDL(ydl_audio_opts) as ydl:
                 ydl.download([url])
