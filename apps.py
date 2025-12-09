@@ -12,7 +12,6 @@ import shutil
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
-# ---------- module-level helper ----------
 def clean_ansi(text: str) -> str:
     ansi_escape = re.compile(r'\x1B[@-_][0-?]*[ -/]*[@-~]')
     return ansi_escape.sub('', text)
@@ -22,8 +21,7 @@ class ModernDownloader(ctk.CTk):
         super().__init__()
 
         self.title("YouTube Downloader by Ramapuspa_")
-        self.geometry("750x650")
-        self.resizable(False, False)
+        self.geometry("750x680")
 
         self.frame = ctk.CTkFrame(self, corner_radius=20)
         self.frame.pack(pady=20, padx=20, fill="both", expand=True)
@@ -31,24 +29,23 @@ class ModernDownloader(ctk.CTk):
         self.label_title = ctk.CTkLabel(self.frame, text="Youtube Downloader", font=("Segoe UI", 28, "bold"))
         self.label_title.pack(pady=15)
 
-        # URL entry
+        # URL 
         self.url_entry = ctk.CTkEntry(self.frame, placeholder_text="Masukkan URL YouTube...", height=40, width=500)
         self.url_entry.pack(pady=10)
         self.url_entry.bind("<KeyRelease>", self.schedule_resolution_fetch)
         self.fetch_timer = None
 
-        # Resolution dropdown
+        # Resolution selection
         self.resolution = ctk.CTkOptionMenu(self.frame, values=["Otomatis"], width=200)
         self.resolution.pack(pady=10)
 
-        # Path info
+        # Folder Selection
         self.path_label = ctk.CTkLabel(self.frame, text="Folder belum dipilih", text_color="gray80")
         self.path_label.pack(pady=5)
-
         self.folder_button = ctk.CTkButton(self.frame, text="Pilih Folder", command=self.choose_folder)
         self.folder_button.pack(pady=5)
 
-        # Show progress?
+        # Show progress box
         self.progress_enabled = ctk.CTkCheckBox(self.frame, text="Tampilkan Progress")
         self.progress_enabled.select()
         self.progress_enabled.pack(pady=5)
@@ -59,7 +56,7 @@ class ModernDownloader(ctk.CTk):
         self.progress.pack(pady=5)
 
         # Progress percentage label
-        self.progress_label = tk.Label(self.frame, bg="#1e1e1e", fg="white", font=("Segoe UI", 10), text="0%")
+        self.progress_label = ctk.CTkLabel(self.frame, font=("Segoe UI", 10), text="0%")
         self.progress_label.pack(pady=(0, 10))
 
         # Log panel
@@ -75,24 +72,19 @@ class ModernDownloader(ctk.CTk):
 
         self.download_path = None
 
-    # ---------------------------------------
     def log(self, msg):
-        # use module-level cleaner to avoid attribute errors when called from different contexts
         clean = clean_ansi(str(msg))
         try:
             self.log_panel.insert("end", clean + "\n")
             self.log_panel.see("end")
         except Exception:
-            # if log_panel isn't available for some reason, fallback to printing
             print(clean)
 
-    # ---------------------------------------
     def schedule_resolution_fetch(self, event=None):
-        # you previously used a tiny after delay (10ms) — keep that but avoid overlapping calls
         if self.fetch_timer:
             self.after_cancel(self.fetch_timer)
             self.fetch_timer = None
-        # call quickly (near-instant)
+        # call quickly 
         self.fetch_timer = self.after(10, self.fetch_resolutions)
 
     def fetch_resolutions(self):
@@ -118,17 +110,14 @@ class ModernDownloader(ctk.CTk):
 
             self.log("Resolusi berhasil diperbarui.")
         except Exception as e:
-            # show actual exception in log to help debugging
             self.log(f"Gagal mengambil resolusi! ({e})")
 
-    # ---------------------------------------
     def choose_folder(self):
         folder = filedialog.askdirectory()
         if folder:
             self.download_path = folder
             self.path_label.configure(text=folder, text_color="white")
 
-    # ---------------------------------------
     def progress_hook(self, d):
         try:
             if d.get("status") == "downloading":
@@ -137,157 +126,148 @@ class ModernDownloader(ctk.CTk):
 
                 if total:
                     percent = downloaded / total
-                    # clamp percent to [0,1]
                     percent = max(0.0, min(1.0, percent))
                     self.progress.set(percent)
-                    self.progress_label.config(text=f"{percent*100:.1f}%")
+                    self.progress_label.configure(text=f"{percent*100:.1f}%")
 
             elif d.get("status") == "finished":
                 self.progress.set(1)
-                self.progress_label.config(text="100%")
-                self.log("Menggabungkan audio + video...")
+                self.progress_label.configure(text="100%")
         except Exception as ex:
-            # never let progress hook crash the downloader
             self.log(f"Progress hook error: {ex}")
 
-    # ---------------------------------------
     def start_download(self):
         threading.Thread(target=self.download_video, daemon=True).start()
 
-    # ---------------------------------------
     def download_video(self):
         url = self.url_entry.get().strip()
         quality = self.resolution.get()
 
-        if not self.download_path:
-            messagebox.showerror("Error", "Pilih folder terlebih dahulu!")
+        if not url:
+            messagebox.showerror("Error", "URL tidak boleh kosong!")
             return
 
+        if not self.download_path:
+            messagebox.showerror("Error", "Pilih folder penyimpanan!")
+            return
+
+        self.log("Memulai proses download...")
         self.progress.set(0)
-        self.progress_label.config(text="0%")
-        self.log("Mengambil metadata video...")
-
-        # safe output template (use folder)
-        outtmpl = os.path.join(self.download_path, "%(title)s.%(ext)s")
-
-        # -----------------------------
-        # FORMAT FIX — AUDIO ALWAYS WORK
-        # -----------------------------
-        if quality != "Otomatis":
-            h = quality.replace("p", "")
-            video_format = (
-                f"bv*[ext=mp4][height<={h}]/"
-                f"bv*[height<={h}]"
-            )
-        else:
-            video_format = "bv*[ext=mp4]/bv*"
-
-        audio_format = "bestaudio[ext=m4a]/bestaudio"
-
-        ydl_opts = {
-            "format": f"{video_format}+{audio_format}/best",
-            "outtmpl": outtmpl,
-            "merge_output_format": "mp4",
-            "nocheckcertificate": True,
-        }
-
-        if self.progress_enabled.get() == 1:
-            ydl_opts["progress_hooks"] = [self.progress_hook]
+        self.progress_label.configure(text="0%")
 
         try:
-            self.log("Memulai download...")
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
+            # ---------------------
+            # Format video + audio
+            # ---------------------
+            if quality != "Otomatis":
+                h = quality.replace("p", "")
+                video_format = f"bestvideo[height<={h}]"
+            else:
+                video_format = "bestvideo"
 
-            # Ambil nama file yang dihasilkan
-            out_file = None
-            try:
-                out_file = info.get("requested_downloads", [{}])[0].get("filepath")
-            except Exception:
-                out_file = None
+            audio_format = "140"  
 
-            if not out_file:
-                matches = sorted(
-                    glob.glob(os.path.join(self.download_path, "*.mp4")),
-                    key=os.path.getmtime,
-                    reverse=True
-                )
-                if matches:
-                    out_file = matches[0]
+            # -------------------------------
+            # 2. Download video (tanpa audio)
+            # -------------------------------
+            self.log("Mengunduh video...")
+            video_path = os.path.join(self.download_path, "__temp_video__.mp4")
 
-            has_audio = True
-            if out_file and shutil.which("ffprobe"):
-                try:
-                    cmd = [
-                        "ffprobe", "-v", "error", "-select_streams", "a",
-                        "-show_entries", "stream=codec_name",
-                        "-of", "default=noprint_wrappers=1:nokey=1",
-                        out_file
-                    ]
-                    p = subprocess.run(cmd, capture_output=True, text=True)
-                    has_audio = bool(p.stdout.strip())
-                except Exception:
-                    has_audio = True
+            ydl_video_opts = {
+                "format": video_format,
+                "outtmpl": video_path,
+                "quiet": True,
+                "nocheckcertificate": True,
+            }
 
-            # -----------------------------
-            # FALLBACK JIKA MP4 TIDAK ADA AUDIO
-            # -----------------------------
+            if self.progress_enabled.get() == 1:
+                ydl_video_opts["progress_hooks"] = [self.progress_hook]
+
+            with yt_dlp.YoutubeDL(ydl_video_opts) as ydl:
+                ydl.download([url])
+
+            # ----------------------
+            # 3. Download audio M4A
+            # ----------------------
+            self.log("Mengunduh audio...")
+            audio_path = os.path.join(self.download_path, "__temp_audio__.m4a")
+
+            ydl_audio_opts = {
+                "format": audio_format,
+                "outtmpl": audio_path,
+                "quiet": True,
+                "nocheckcertificate": True,
+            }
+
+            with yt_dlp.YoutubeDL(ydl_audio_opts) as ydl:
+                ydl.download([url])
+
+            # -----------------------------------------------
+            # 4. Tentukan output file final berdasarkan judul
+            # -----------------------------------------------
+            self.log("Mengambil metadata judul video...")
+            meta = yt_dlp.YoutubeDL({"quiet": True}).extract_info(url, download=False)
+            title = re.sub(r'[\\/*?:"<>|]', "", meta["title"])
+            final_path = os.path.join(self.download_path, f"{title}.mp4")
+
+            # --------------------------------
+            # 5. Gabungkan video + audio (AAC)
+            # --------------------------------
+            self.log("Menggabungkan video + audio...")
+
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-i", audio_path,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                final_path
+            ]
+
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            # ----------------------------------
+            # 6. Cek apakah final memiliki audio
+            # ----------------------------------
+            cmd_probe = [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "a",
+                "-show_entries", "stream=codec_name",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                final_path
+            ]
+            probe = subprocess.run(cmd_probe, capture_output=True, text=True)
+            has_audio = bool(probe.stdout.strip())
+
             if not has_audio:
-                self.log("Tidak ada audio — melakukan konversi OPUS → AAC...")
-
-                tmp_audio = os.path.join(self.download_path, "__tmp_audio__.webm")
-                tmp_aac = os.path.join(self.download_path, "__tmp_audio__.aac")
-
-                # Download audio asli (OPUS)
-                ydl_audio_opts = {"format": "bestaudio", "outtmpl": tmp_audio}
-                with yt_dlp.YoutubeDL(ydl_audio_opts) as ydl:
-                    ydl.download([url])
-
-                # Convert OPUS → AAC
-                cmd_convert = [
+                self.log("⚠ Audio belum masuk! Mencoba perbaikan...")
+                # Fallback → Encode ulang audio
+                fallback = final_path.replace(".mp4", "_fix.mp4")
+                cmd_fix = [
                     "ffmpeg", "-y",
-                    "-i", tmp_audio,
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    tmp_aac
-                ]
-                subprocess.run(cmd_convert, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-                # Merge video + AAC (pasti supported)
-                merged = out_file.replace(".mp4", "_merged.mp4")
-                cmd_merge = [
-                    "ffmpeg", "-y",
-                    "-i", out_file,
-                    "-i", tmp_aac,
+                    "-i", video_path,
+                    "-i", audio_path,
                     "-c:v", "copy",
                     "-c:a", "aac",
-                    merged
+                    fallback
                 ]
-                subprocess.run(cmd_merge, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                subprocess.run(cmd_fix, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-                # Replace output file
-                try:
-                    os.remove(out_file)
-                except Exception:
-                    pass
-                try:
-                    os.remove(tmp_audio)
-                except Exception:
-                    pass
-                try:
-                    os.remove(tmp_aac)
-                except Exception:
-                    pass
-                try:
-                    os.replace(merged, out_file)
-                except Exception:
-                    pass
+                os.remove(final_path)
+                os.rename(fallback, final_path)
 
-                self.log("Audio OPUS berhasil dikonversi → AAC")
-                self.log("Fallback merge selesai.")
+                self.log("Perbaikan selesai ✔ Audio berhasil ditambahkan.")
+
+            # ------------------------
+            # 7. Hapus file sementara
+            # ------------------------
+            os.remove(video_path)
+            os.remove(audio_path)
 
             self.progress.set(1)
-            self.progress_label.config(text="100%")
+            self.progress_label.configure(text="100%")
             self.log("Download selesai ✔")
 
         except Exception as e:
