@@ -22,7 +22,7 @@ def clean_ansi(text: str) -> str:
 class ModernDownloader(ctk.CTk):
     def __init__(self):
         super().__init__()
-
+               
         self.title("YouTube Downloader by Ramapuspa_")
         self.geometry("750x710")
 
@@ -69,17 +69,20 @@ class ModernDownloader(ctk.CTk):
         self.download_button.pack(pady=10)
         self.download_path = None
         
-        # Cancel button
+        # Cancel and Continue button
         self.cancel_flag = False
         self.ffmpeg_process = None
         self.ydl_instance = None
+        self.button_mode = "cancel"
         self.cancel_button = ctk.CTkButton(
             self.frame, text="Cancel", height=42,
-            font=("Segoe UI", 16, "bold"), fg_color="red", command=self.cancel_download
+            font=("Segoe UI", 16, "bold"), fg_color="red", 
+            command=self.cancel_or_continue
         )
         self.cancel_button.pack(pady=10)
-        self.cancel_button.configure(state="disabled")
-        
+        self.cancel_button.configure(state="normal")
+
+
         # History button
         self.history_button = ctk.CTkButton(
             self.frame, text="Lihat History", height=42, 
@@ -125,8 +128,24 @@ class ModernDownloader(ctk.CTk):
         self.progress.set(0)
         self.progress_label.configure(text="Dibatalkan")
         self.download_button.configure(state="normal")
-        self.cancel_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
+        self.button_mode = "continue"
+        self.cancel_button.configure(text="Continue", fg_color="green")
     
+    def cancel_or_continue(self):
+        if self.button_mode == "cancel":
+            self.cancel_download()
+        else:
+            self.continue_download()
+    
+    def continue_download(self):
+        self.cancel_flag = False
+        # Jalankan ulang download dari awal
+        self.start_download()
+        # Kembalikan tombol ke mode CANCEL
+        self.button_mode = "cancel"
+        self.cancel_button.configure(text="Cancel", fg_color="red")
+        
     def save_history(self, title, url, resolution, size, output_path):
         history_file = "download_history.json"
         entry = {
@@ -371,6 +390,8 @@ class ModernDownloader(ctk.CTk):
                 "format": video_format,
                 "outtmpl": video_path,
                 "quiet": True,
+                "continuedl": True,
+                "nopart": False,
                 "nocheckcertificate": True,
                 "progress_hooks" : [self.progress_hook],
             }
@@ -395,6 +416,8 @@ class ModernDownloader(ctk.CTk):
                 "format": audio_format,
                 "outtmpl": audio_path,
                 "quiet": True,
+                "continuedl": True,
+                "nopart": False,
                 "nocheckcertificate": True,
                 "progress_hooks" : [self.progress_hook],
             }
@@ -576,7 +599,7 @@ class ModernDownloader(ctk.CTk):
             # Reset tombol (pastikan selalu dijalankan)
             try:
                 self.download_button.configure(state="normal")
-                self.cancel_button.configure(state="disabled")
+                self.cancel_button.configure(state="normal")
             except Exception:
                 pass
             
