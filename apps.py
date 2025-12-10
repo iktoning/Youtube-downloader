@@ -40,33 +40,49 @@ class ModernDownloader(ctk.CTk):
 
         # Resolution selection
         self.resolution = ctk.CTkOptionMenu(self.frame, values=["Otomatis"], width=200)
-        self.resolution.pack(pady=10)
+        self.resolution.pack(pady=5)
 
         # Folder Selection
         self.path_label = ctk.CTkLabel(self.frame, text="Folder belum dipilih", text_color="gray80")
-        self.path_label.pack(pady=5)
+        self.path_label.pack(pady=2)
         self.folder_button = ctk.CTkButton(self.frame, text="Pilih Folder", command=self.choose_folder)
-        self.folder_button.pack(pady=5)
+        self.folder_button.pack(pady=7)
 
         # Progress bar
         self.progress = ctk.CTkProgressBar(self.frame, width=420)
         self.progress.set(0)
         self.progress.pack(pady=5)
+        
+        # Frame horizontal untuk: percentage | speed | ETA
+        self.info_frame = ctk.CTkFrame(self.frame, fg_color="transparent")
+        self.info_frame.pack(pady=(0, 10))
 
         # Progress percentage label
-        self.progress_label = ctk.CTkLabel(self.frame, font=("Segoe UI", 10), text="0%")
-        self.progress_label.pack(pady=(0, 10))
+        self.progress_label = ctk.CTkLabel(self.info_frame, font=("Segoe UI", 10), text="0%")
+        self.progress_label.pack(side="left", padx=10)
+        
+        # Speed meter label
+        self.speed_label = ctk.CTkLabel(self.info_frame, font=("Segoe UI", 10), text="0 KB/s")
+        self.speed_label.pack(side="left", padx=10)
+        
+        # ETA label
+        self.eta_label = ctk.CTkLabel(self.info_frame, font=("Segoe UI", 10), text="ETA --:--")
+        self.eta_label.pack(side="left", padx=10)
 
         # Log panel
-        self.log_panel = ctk.CTkTextbox(self.frame, width=500, height=200)
-        self.log_panel.pack(pady=10)
+        self.log_panel = ctk.CTkTextbox(self.frame, width=500, height=180)
+        self.log_panel.pack(pady=5)
+        
+        # Frame button (horizontal)
+        self.button_frame = ctk.CTkFrame(self.frame)
+        self.button_frame.pack(pady=10)
 
         # Download button
         self.download_button = ctk.CTkButton(
-            self.frame, text="Download", height=42,
+            self.button_frame, text="Download", height=42,
             font=("Segoe UI", 16, "bold"), command=self.start_download
         )
-        self.download_button.pack(pady=10)
+        self.download_button.grid(row=0, column=1, padx=20)
         self.download_path = None
         
         # Cancel and Continue button
@@ -75,20 +91,20 @@ class ModernDownloader(ctk.CTk):
         self.ydl_instance = None
         self.button_mode = "cancel"
         self.cancel_button = ctk.CTkButton(
-            self.frame, text="Cancel", height=42,
+            self.button_frame, text="Cancel", height=42,
             font=("Segoe UI", 16, "bold"), fg_color="red", 
             command=self.cancel_or_continue
         )
-        self.cancel_button.pack(pady=10)
+        self.cancel_button.grid(row=0, column=0, padx=20)
         self.cancel_button.configure(state="normal")
 
 
         # History button
         self.history_button = ctk.CTkButton(
-            self.frame, text="Lihat History", height=42, 
+            self.button_frame, text="Lihat History", height=42, 
             font=("Segoe UI", 16, "bold"), command=self.open_history_window
         )
-        self.history_button.pack(pady=10)
+        self.history_button.grid(row=0, column=2, padx=20)
 
     def log(self, msg):
         clean = clean_ansi(str(msg))
@@ -100,6 +116,8 @@ class ModernDownloader(ctk.CTk):
     
     def cancel_download(self):
         self.cancel_flag = True
+        self.speed_label.configure(text="0 KB/s")
+        self.eta_label.configure(text="ETA --:--")
         self.log("Membatalkan download...")
         # Abort yt-dlp if available
         try:
@@ -321,28 +339,70 @@ class ModernDownloader(ctk.CTk):
             if getattr(self, "cancel_flag", False):
                 raise Exception("Download dibatalkan oleh pengguna")
 
+            # ============================
+            # STATUS: DOWNLOADING
+            # ============================
             if d.get("status") == "downloading":
                 downloaded = d.get("downloaded_bytes", 0)
                 total = d.get("total_bytes") or d.get("total_bytes_estimate")
 
+                # --- PROGRESS BAR ---
                 if total:
                     percent = downloaded / total
                     percent = max(0.0, min(1.0, percent))
-                    # update UI di main thread 
+
                     self.progress.set(percent)
                     self.progress_label.configure(text=f"{percent*100:.1f}%")
 
+                # --- SPEED METER ---
+                current_time = time.time()
+                current_bytes = downloaded
+
+                diff_bytes = current_bytes - self.last_bytes
+                diff_time = current_time - self.last_time
+
+                if diff_time > 0:
+                    speed = diff_bytes / diff_time
+
+                    if speed >= 1024 * 1024:
+                        speed_str = f"{speed/(1024*1024):.2f} MB/s"
+                    else:
+                        speed_str = f"{speed/1024:.2f} KB/s"
+
+                    self.speed_label.configure(text=speed_str)
+
+                self.last_bytes = current_bytes
+                self.last_time = current_time
+
+                # --- ETA ---
+                if "eta" in d and d["eta"] is not None:
+                    eta = d["eta"]
+                    m, s = divmod(eta, 60)
+                    self.eta_label.configure(text=f"ETA {m:02d}:{s:02d}")
+                else:
+                    self.eta_label.configure(text="ETA --:--")
+
+            # ============================
+            # STATUS: FINISHED
+            # ============================
             elif d.get("status") == "finished":
                 self.progress.set(1)
                 self.progress_label.configure(text="100%")
-        except Exception as ex:
-            # Biarkan exception naik sehingga yt-dlp menghentikan proses
+                self.speed_label.configure(text="0 KB/s")
+                self.eta_label.configure(text="ETA 00:00")
+
+        except Exception:
             raise
+
 
     def start_download(self):
         self.cancel_flag = False
         self.ydl_instance = None
         self.ffmpeg_process = None
+        self.last_bytes = 0
+        self.last_time = time.time()
+        self.speed_label.configure(text="0 KB/s")
+        self.eta_label.configure(text="ETA --:--")
         self.download_button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
         threading.Thread(target=self.download_video, daemon=True).start()
@@ -562,7 +622,9 @@ class ModernDownloader(ctk.CTk):
 
             self.progress.set(1)
             self.progress_label.configure(text="100%")
-            self.log("Download selesai ✔")
+            self.log("Download selesai")
+            self.speed_label.configure(text="0 KB/s")
+            self.eta_label.configure(text="ETA --:--")
         
         except Exception as e:
             err = e
