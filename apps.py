@@ -8,6 +8,7 @@ import subprocess
 import glob
 import shutil
 import json
+import time
 from tkinter import filedialog, messagebox
 from datetime import datetime
 
@@ -68,6 +69,17 @@ class ModernDownloader(ctk.CTk):
         self.download_button.pack(pady=10)
         self.download_path = None
         
+        # Cancel button
+        self.cancel_flag = False
+        self.ffmpeg_process = None
+        self.ydl_instance = None
+        self.cancel_button = ctk.CTkButton(
+            self.frame, text="Cancel", height=42,
+            font=("Segoe UI", 16, "bold"), fg_color="red", command=self.cancel_download
+        )
+        self.cancel_button.pack(pady=10)
+        self.cancel_button.configure(state="disabled")
+        
         # History button
         self.history_button = ctk.CTkButton(
             self.frame, text="Lihat History", height=42, 
@@ -82,6 +94,38 @@ class ModernDownloader(ctk.CTk):
             self.log_panel.see("end")
         except Exception:
             print(clean)
+    
+    def cancel_download(self):
+        self.cancel_flag = True
+        self.log("Membatalkan download...")
+        # Abort yt-dlp if available
+        try:
+            if getattr(self, "ydl_instance", None):
+                try:
+                    self.ydl_instance._abort_download = True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Terminate ffmpeg process if running
+        try:
+            if getattr(self, "ffmpeg_process", None):
+                try:
+                    self.ffmpeg_process.terminate()
+                    self.ffmpeg_process.wait(timeout=2)
+                except Exception:
+                    try:
+                        self.ffmpeg_process.kill()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Reset UI
+        self.progress.set(0)
+        self.progress_label.configure(text="Dibatalkan")
+        self.download_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
     
     def save_history(self, title, url, resolution, size, output_path):
         history_file = "download_history.json"
@@ -254,6 +298,10 @@ class ModernDownloader(ctk.CTk):
 
     def progress_hook(self, d):
         try:
+            # Jika user menekan cancel → hentikan dengan exception
+            if getattr(self, "cancel_flag", False):
+                raise Exception("Download dibatalkan oleh pengguna")
+
             if d.get("status") == "downloading":
                 downloaded = d.get("downloaded_bytes", 0)
                 total = d.get("total_bytes") or d.get("total_bytes_estimate")
@@ -261,6 +309,7 @@ class ModernDownloader(ctk.CTk):
                 if total:
                     percent = downloaded / total
                     percent = max(0.0, min(1.0, percent))
+                    # update UI di main thread 
                     self.progress.set(percent)
                     self.progress_label.configure(text=f"{percent*100:.1f}%")
 
@@ -268,12 +317,22 @@ class ModernDownloader(ctk.CTk):
                 self.progress.set(1)
                 self.progress_label.configure(text="100%")
         except Exception as ex:
-            self.log(f"Progress hook error: {ex}")
+            # Biarkan exception naik sehingga yt-dlp menghentikan proses
+            raise
 
     def start_download(self):
+        self.cancel_flag = False
+        self.ydl_instance = None
+        self.ffmpeg_process = None
+        self.download_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
         threading.Thread(target=self.download_video, daemon=True).start()
 
     def download_video(self):
+        video_path = None
+        audio_path = None
+        final_path = None
+        err = None
         url = self.url_entry.get().strip()
         quality = self.resolution.get()
 
@@ -291,7 +350,7 @@ class ModernDownloader(ctk.CTk):
 
         try:
             # ---------------------
-            # Format video + audio
+            # 1. Format video + audio
             # ---------------------
             if quality != "Otomatis":
                 h = re.findall(r"(\d+)p", quality)[0]
@@ -299,43 +358,57 @@ class ModernDownloader(ctk.CTk):
             else:
                 video_format = "bestvideo"
 
-            audio_format = "140"  
-
+            audio_format = "140" 
+            video_path = os.path.join(self.download_path, "__temp_video__.mp4") 
+            audio_path = os.path.join(self.download_path, "__temp_audio__.m4a")
+            
             # -------------------------------
             # 2. Download video (tanpa audio)
             # -------------------------------
             self.log("Mengunduh video...")
-            video_path = os.path.join(self.download_path, "__temp_video__.mp4")
 
             ydl_video_opts = {
                 "format": video_format,
                 "outtmpl": video_path,
                 "quiet": True,
                 "nocheckcertificate": True,
+                "progress_hooks" : [self.progress_hook],
             }
-            
-            ydl_video_opts["progress_hooks"] = [self.progress_hook]
 
             with yt_dlp.YoutubeDL(ydl_video_opts) as ydl:
-                ydl.download([url])
+                self.ydl_instance = ydl
+                try:
+                    ydl.download([url])
+                finally:
+                    self.ydl_instance = None
+            
+            if self.cancel_flag:
+                self.log("Download video dibatalkan.")
+                return
 
             # ----------------------
             # 3. Download audio M4A
             # ----------------------
             self.log("Mengunduh audio...")
-            audio_path = os.path.join(self.download_path, "__temp_audio__.m4a")
 
             ydl_audio_opts = {
                 "format": audio_format,
                 "outtmpl": audio_path,
                 "quiet": True,
                 "nocheckcertificate": True,
+                "progress_hooks" : [self.progress_hook],
             }
-            
-            ydl_audio_opts["progress_hooks"] = [self.progress_hook]
 
             with yt_dlp.YoutubeDL(ydl_audio_opts) as ydl:
-                ydl.download([url])
+                self.ydl_instance = ydl
+                try:
+                    ydl.download([url])
+                finally:
+                    self.ydl_instance = None
+
+            if self.cancel_flag:
+                self.log("Download audio dibatalkan.")
+                return
 
             # -----------------------------------------------
             # 4. Tentukan output file final berdasarkan judul
@@ -360,7 +433,28 @@ class ModernDownloader(ctk.CTk):
                 final_path
             ]
 
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.ffmpeg_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            # monitoring loop — cek cancel_flag
+            while True:
+                if self.ffmpeg_process.poll() is not None:
+                    break
+                if self.cancel_flag:
+                    try:
+                        self.ffmpeg_process.terminate()
+                        self.ffmpeg_process.wait(timeout=2)
+                    except Exception:
+                        try: self.ffmpeg_process.kill()
+                        except Exception: pass
+                    self.log("Merge dihentikan.")
+                    # cleanup
+                    if final_path and os.path.exists(final_path):
+                        try: os.remove(final_path)
+                        except: pass
+                    return
+                
+            time.sleep(0.2)
+            self.ffmpeg_process = None
 
             # ----------------------------------
             # 6. Cek apakah final memiliki audio
@@ -377,7 +471,7 @@ class ModernDownloader(ctk.CTk):
             has_audio = bool(probe.stdout.strip())
 
             if not has_audio:
-                self.log("⚠ Audio belum masuk! Mencoba perbaikan...")
+                self.log("Audio belum masuk! Mencoba perbaikan...")
                 # Fallback → Encode ulang audio
                 fallback = final_path.replace(".mp4", "_fix.mp4")
                 cmd_fix = [
@@ -389,21 +483,51 @@ class ModernDownloader(ctk.CTk):
                     fallback
                 ]
                 subprocess.run(cmd_fix, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-                os.remove(final_path)
-                os.rename(fallback, final_path)
-
-                self.log("Perbaikan selesai ✔ Audio berhasil ditambahkan.")
+                # monitor proc_fix agar bisa di-cancel juga
+                while True:
+                    if proc_fix.poll() is not None:
+                        break
+                    if self.cancel_flag:
+                        try:
+                            proc_fix.terminate()
+                            proc_fix.wait(timeout=2)
+                        except Exception:
+                            try: proc_fix.kill()
+                            except: pass
+                        self.log("Perbaikan audio dibatalkan.")
+                        if os.path.exists(fallback):
+                            try: os.remove(fallback)
+                            except: pass
+                        return
+                    time.sleep(0.2)
+                
+                try:
+                    os.remove(final_path)
+                    os.rename(fallback, final_path)
+                    self.log("Perbaikan selesai. Audio berhasil ditambahkan.")
+                except Exception as e:
+                    self.log(f"Gagal mengganti file final: {e}")
 
             # ------------------------
             # 7. Hapus file sementara
             # ------------------------
-            os.remove(video_path)
-            os.remove(audio_path)
+            try:
+                if video_path and os.path.exists(video_path):
+                    os.remove(video_path)
+            except Exception:
+                pass
+            try:
+                if audio_path and os.path.exists(audio_path):
+                    os.remove(audio_path)
+            except Exception:
+                pass
             
             # Simpan history
-            file_size = os.path.getsize(final_path) / (1024*1024)
-            size_str = f"{file_size:.1f} MB"
+            try:
+                file_size = os.path.getsize(final_path) / (1024*1024)
+                size_str = f"{file_size:.1f} MB"
+            except Exception:
+                size_str = "-"
 
             self.save_history(
                 title=title,
@@ -418,9 +542,44 @@ class ModernDownloader(ctk.CTk):
             self.log("Download selesai ✔")
         
         except Exception as e:
-            self.log(f"ERROR: {e}")
-            messagebox.showerror("Error", str(e))
-
+            err = e
+            # jika exception berasal dari cancel di progress_hook, sudah tercatat di log sebelumnya
+            if self.cancel_flag:
+                self.log("Download dibatalkan.")
+            else:
+                self.log(f"ERROR: {e}")
+                try:
+                    messagebox.showerror("Error", str(e))
+                except Exception:
+                    pass
+        finally:
+            # Cleanup file sementara jika ada (cek None dahulu)
+            try:
+                for p in (video_path, audio_path):
+                    if p and os.path.exists(p):
+                        try: os.remove(p)
+                        except: pass
+            except Exception:
+                pass
+            # Reset state proses dan UI
+            try:
+                self.ydl_instance = None
+                if getattr(self, "ffmpeg_process", None):
+                    try:
+                        self.ffmpeg_process.terminate()
+                    except Exception:
+                        try: self.ffmpeg_process.kill()
+                        except Exception: pass
+                self.ffmpeg_process = None
+            except Exception:
+                pass
+            # Reset tombol (pastikan selalu dijalankan)
+            try:
+                self.download_button.configure(state="normal")
+                self.cancel_button.configure(state="disabled")
+            except Exception:
+                pass
+            
 if __name__ == "__main__":
     app = ModernDownloader()
     app.mainloop()
